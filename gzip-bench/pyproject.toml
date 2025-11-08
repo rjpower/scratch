@@ -1,0 +1,16 @@
+[project]
+name = "compression-benchmarks"
+version = "0.1.0"
+description = "Benchmarks for compression algorithms"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.8.0",
+    "numpy>=1.26.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = []

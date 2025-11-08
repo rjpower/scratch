@@ -1,0 +1,11 @@
+# Generated benchmark outputs
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+*.svg
+
+# Python cache
+__pycache__/
+*.py[cod]
