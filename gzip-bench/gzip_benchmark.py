@@ -19,13 +19,14 @@ This script analyzes:
 import gzip
 import json
 import time
+import random
 from pathlib import Path
 import zstandard as zstd
 import click
 
 
-def generate_sample_text(word_count: int = 1000) -> str:
-    """Generate sample text with realistic word patterns."""
+def generate_sample_text(word_count: int = 1000, doc_id: int = 0) -> str:
+    """Generate sample text with realistic word patterns and randomization."""
     # Use a mix of common words to simulate realistic JSON data
     common_words = [
         "the", "be", "to", "of", "and", "a", "in", "that", "have", "I",
@@ -42,47 +43,71 @@ def generate_sample_text(word_count: int = 1000) -> str:
 
     words = []
     for i in range(word_count):
-        # Add some variation to make it more realistic
-        if i % 10 == 0:
-            words.append(f"item_{i}")
-        elif i % 7 == 0:
-            words.append(f"{i}")
+        # Add randomization to create unique documents
+        rand_val = random.randint(0, 100)
+        if rand_val < 10:
+            # 10% - document-specific identifiers
+            words.append(f"doc{doc_id}_item_{i}")
+        elif rand_val < 20:
+            # 10% - numbers
+            words.append(f"{random.randint(0, 10000)}")
+        elif rand_val < 25:
+            # 5% - unique strings
+            words.append(f"unique_{doc_id}_{random.randint(1000, 9999)}")
         else:
-            words.append(common_words[i % len(common_words)])
+            # 75% - random common words (not sequential pattern)
+            words.append(random.choice(common_words))
 
     return " ".join(words)
 
 
-def create_json_document() -> dict:
-    """Create a JSON document with 1000 word body and metadata."""
+def create_json_document(doc_id: int = 0) -> dict:
+    """Create a JSON document with 1000 word body and unique metadata per document."""
+    # Randomize document attributes to make each document unique
+    authors = ["John Doe", "Jane Smith", "Bob Johnson", "Alice Williams", "Charlie Brown",
+               "Diana Prince", "Eve Anderson", "Frank Miller", "Grace Lee", "Henry Taylor"]
+    categories = ["technology", "science", "business", "health", "education",
+                  "entertainment", "sports", "politics", "travel", "food"]
+    doc_types = ["article", "blog", "report", "paper", "tutorial", "review", "guide"]
+    statuses = ["published", "draft", "pending", "archived", "featured"]
+    languages = ["en", "es", "fr", "de", "ja", "zh", "pt", "ru", "ar", "hi"]
+    regions = ["us-west-2", "us-east-1", "eu-west-1", "ap-south-1", "eu-central-1"]
+
+    all_tags = ["benchmark", "compression", "performance", "gzip", "json", "zstd",
+                "optimization", "data", "processing", "analysis", "storage", "efficiency"]
+
     return {
-        "id": "doc_12345678",
-        "timestamp": "2025-11-08T10:30:00Z",
-        "version": "1.0.0",
-        "type": "article",
-        "status": "published",
+        "id": f"doc_{doc_id:08d}_{random.randint(10000, 99999)}",
+        "timestamp": f"2025-{random.randint(1,12):02d}-{random.randint(1,28):02d}T{random.randint(0,23):02d}:{random.randint(0,59):02d}:00Z",
+        "version": f"{random.randint(1,5)}.{random.randint(0,9)}.{random.randint(0,20)}",
+        "type": random.choice(doc_types),
+        "status": random.choice(statuses),
         "metadata": {
-            "author": "John Doe",
-            "category": "technology",
-            "tags": ["benchmark", "compression", "performance", "gzip", "json"],
-            "views": 12543,
-            "likes": 892,
-            "comments": 45,
-            "shares": 123,
-            "language": "en",
-            "region": "us-west-2",
+            "author": random.choice(authors),
+            "category": random.choice(categories),
+            "tags": random.sample(all_tags, k=random.randint(3, 8)),
+            "views": random.randint(100, 50000),
+            "likes": random.randint(10, 5000),
+            "comments": random.randint(0, 500),
+            "shares": random.randint(0, 1000),
+            "language": random.choice(languages),
+            "region": random.choice(regions),
         },
-        "body": generate_sample_text(1000),
-        "summary": generate_sample_text(50),
+        "body": generate_sample_text(1000, doc_id),
+        "summary": generate_sample_text(50, doc_id),
         "references": [
-            {"id": f"ref_{i}", "url": f"https://example.com/doc/{i}", "title": f"Reference {i}"}
-            for i in range(10)
+            {
+                "id": f"ref_{doc_id}_{i}_{random.randint(1000, 9999)}",
+                "url": f"https://example.com/doc/{doc_id}/{i}/{random.randint(1000, 9999)}",
+                "title": f"Reference {i} for document {doc_id}"
+            }
+            for i in range(random.randint(5, 15))
         ],
         "analytics": {
-            "page_load_time": 1.234,
-            "bounce_rate": 0.23,
-            "session_duration": 456.78,
-            "engagement_score": 8.5,
+            "page_load_time": round(random.uniform(0.5, 5.0), 3),
+            "bounce_rate": round(random.uniform(0.1, 0.6), 2),
+            "session_duration": round(random.uniform(30, 900), 2),
+            "engagement_score": round(random.uniform(1.0, 10.0), 1),
         }
     }
 
@@ -163,12 +188,12 @@ def benchmark_zstd(data: bytes, compression_level: int, iterations: int = 10) ->
 
 def run_benchmarks(num_docs: int = 10000, iterations: int = 10, gzip_levels: int = 10, zstd_levels: int = 22):
     """Run compression benchmarks across all compression levels."""
-    print(f"Generating {num_docs:,} sample JSON documents...")
+    print(f"Generating {num_docs:,} unique sample JSON documents...")
 
-    # Generate multiple documents and concatenate them
+    # Generate multiple unique documents with different content
     docs = []
     for i in range(num_docs):
-        doc = create_json_document()
+        doc = create_json_document(doc_id=i)
         docs.append(doc)
 
     # Convert all docs to a single JSON array
