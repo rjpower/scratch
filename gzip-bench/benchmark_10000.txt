@@ -1,0 +1,107 @@
+====================================================================================================
+GZIP vs ZSTD Compression Benchmark (10,000 documents, 3 iterations)
+====================================================================================================
+Generating 10,000 unique sample JSON documents...
+Total data size: 97,064,368 bytes (92.57 MB)
+Average document size: 9706 bytes
+
+Running benchmarks (3 iterations each)...
+
+  Testing memcpy (baseline)...
+    Time: 79.097ms, Throughput: 1170.3 MB/s
+
+  Testing GZIP compression levels...
+    Level 0... Time: 256.38ms, Ratio: -0.0%, Throughput: 361.1 MB/s
+    Level 1... Time: 897.49ms, Ratio: 69.1%, Throughput: 103.1 MB/s
+    Level 2... Time: 982.85ms, Ratio: 69.7%, Throughput: 94.2 MB/s
+    Level 3... Time: 1452.68ms, Ratio: 70.3%, Throughput: 63.7 MB/s
+    Level 4... Time: 1454.83ms, Ratio: 72.1%, Throughput: 63.6 MB/s
+    Level 5... Time: 2198.18ms, Ratio: 73.4%, Throughput: 42.1 MB/s
+    Level 6... Time: 3567.92ms, Ratio: 73.9%, Throughput: 25.9 MB/s
+    Level 7... Time: 4291.11ms, Ratio: 74.1%, Throughput: 21.6 MB/s
+    Level 8... Time: 5972.45ms, Ratio: 74.1%, Throughput: 15.5 MB/s
+    Level 9... Time: 5958.27ms, Ratio: 74.1%, Throughput: 15.5 MB/s
+
+  Testing ZSTD compression levels...
+    Level 1... Time: 353.10ms, Ratio: 72.3%, Throughput: 262.2 MB/s
+    Level 2... Time: 401.35ms, Ratio: 72.3%, Throughput: 230.6 MB/s
+    Level 3... Time: 528.50ms, Ratio: 73.0%, Throughput: 175.2 MB/s
+    Level 4... Time: 555.84ms, Ratio: 73.1%, Throughput: 166.5 MB/s
+    Level 5... Time: 912.78ms, Ratio: 73.8%, Throughput: 101.4 MB/s
+    Level 6... Time: 1338.93ms, Ratio: 74.9%, Throughput: 69.1 MB/s
+    Level 7... Time: 1549.10ms, Ratio: 75.1%, Throughput: 59.8 MB/s
+    Level 8... Time: 2034.72ms, Ratio: 75.5%, Throughput: 45.5 MB/s
+    Level 9... Time: 2352.96ms, Ratio: 75.5%, Throughput: 39.3 MB/s
+    Level 10... Time: 3482.74ms, Ratio: 75.9%, Throughput: 26.6 MB/s
+
+====================================================================================================
+COMPRESSION BENCHMARK RESULTS
+====================================================================================================
+
+Original size: 97,064,368 bytes (92.57 MB)
+
+----------------------------------------------------------------------------------------------------
+MEMCPY BASELINE (no compression)
+----------------------------------------------------------------------------------------------------
+Time: 79.097ms | Throughput: 1170.3 MB/s
+
+----------------------------------------------------------------------------------------------------
+GZIP COMPRESSION
+----------------------------------------------------------------------------------------------------
+Level    Time (ms)    Ratio (%)    Size (MB)    Throughput      vs memcpy      
+----------------------------------------------------------------------------------------------------
+0        256.38       -0.0         92.57        361.1           3.24x slower   
+1        897.49       69.1         28.64        103.1           11.35x slower  
+2        982.85       69.7         28.02        94.2            12.43x slower  
+3        1452.68      70.3         27.48        63.7            18.37x slower  
+4        1454.83      72.1         25.81        63.6            18.39x slower  
+5        2198.18      73.4         24.64        42.1            27.79x slower  
+6        3567.92      73.9         24.14        25.9            45.11x slower  
+7        4291.11      74.1         24.00        21.6            54.25x slower  
+8        5972.45      74.1         23.93        15.5            75.51x slower  
+9        5958.27      74.1         23.93        15.5            75.33x slower  
+
+Best compression: Level 8 (74.1% reduction)
+Fastest: Level 0 (256.38ms)
+
+----------------------------------------------------------------------------------------------------
+ZSTD COMPRESSION
+----------------------------------------------------------------------------------------------------
+Level    Time (ms)    Ratio (%)    Size (MB)    Throughput      vs memcpy      
+----------------------------------------------------------------------------------------------------
+1        353.10       72.3         25.62        262.2           4.46x slower   
+2        401.35       72.3         25.63        230.6           5.07x slower   
+3        528.50       73.0         24.99        175.2           6.68x slower   
+4        555.84       73.1         24.87        166.5           7.03x slower   
+5        912.78       73.8         24.25        101.4           11.54x slower  
+6        1338.93      74.9         23.27        69.1            16.93x slower  
+7        1549.10      75.1         23.07        59.8            19.58x slower  
+8        2034.72      75.5         22.64        45.5            25.72x slower  
+9        2352.96      75.5         22.63        39.3            29.75x slower  
+10       3482.74      75.9         22.34        26.6            44.03x slower  
+
+Best compression: Level 10 (75.9% reduction)
+Fastest: Level 1 (353.10ms)
+
+====================================================================================================
+SUMMARY: GZIP vs ZSTD vs MEMCPY
+====================================================================================================
+
+Method          Level    Time (ms)    Ratio (%)    Throughput      vs memcpy      
+----------------------------------------------------------------------------------------------------
+memcpy          -        79.097       0.0          1170.3          1.00x          
+GZIP (default)  6        3567.92      73.9         25.9            45.11x         
+ZSTD (default)  3        528.50       73.0         175.2           6.68x          
+GZIP (best)     8        5972.45      74.1         15.5            75.51x         
+ZSTD (best)     10       3482.74      75.9         26.6            44.03x         
+GZIP (fastest)  0        256.38       -0.0         361.1           3.24x          
+ZSTD (fastest)  1        353.10       72.3         262.2           4.46x          
+
+====================================================================================================
+KEY FINDINGS:
+====================================================================================================
+- ZSTD is 0.99x better compression ratio than GZIP at default levels
+- ZSTD is 6.75x faster than GZIP at default levels
+- Best ZSTD compression (75.9%) vs Best GZIP (74.1%)
+- All compression methods are slower than memcpy baseline, as expected
+====================================================================================================
