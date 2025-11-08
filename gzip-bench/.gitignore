@@ -9,3 +9,6 @@
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Benchmark outputs
+benchmark_results.txt
