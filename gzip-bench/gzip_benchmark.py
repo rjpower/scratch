@@ -98,15 +98,12 @@ def benchmark_memcpy(data: bytes, iterations: int = 100) -> tuple[float, float, 
 
     for _ in range(iterations):
         start = time.perf_counter()
-        # Simulate memcpy with bytes copy
-        copied_data = bytes(data)
+        # Force a copy using bytearray conversion (actual memory copy)
+        copied_data = bytearray(data)
         end = time.perf_counter()
         times.append(end - start)
 
     avg_time = sum(times) / len(times) * 1000  # Convert to milliseconds
-    # Ensure we have a minimum measurable time to avoid unrealistic throughput
-    if avg_time < 0.001:
-        avg_time = 0.001
     return avg_time, 0.0, len(data)
 
 
