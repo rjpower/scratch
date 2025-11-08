@@ -2,25 +2,26 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "matplotlib>=3.8.0",
-#     "numpy>=1.26.0",
+#     "zstandard>=0.22.0",
+#     "click>=8.1.0",
 # ]
 # ///
 """
-Benchmark gzip compression effectiveness on JSON documents.
+Benchmark gzip and zstd compression effectiveness on JSON documents.
 
 This script analyzes:
 - Compression ratio vs compression level
 - Execution time vs compression level
 - Size reduction effectiveness
+- Comparison with memcpy baseline
 """
 
 import gzip
 import json
 import time
 from pathlib import Path
-import matplotlib.pyplot as plt
-import numpy as np
+import zstandard as zstd
+import click
 
 
 def generate_sample_text(word_count: int = 1000) -> str:
@@ -86,9 +87,29 @@ def create_json_document() -> dict:
     }
 
 
-def benchmark_compression(data: bytes, compression_level: int, iterations: int = 100) -> tuple[float, float, int]:
+def benchmark_memcpy(data: bytes, iterations: int = 100) -> tuple[float, float, int]:
     """
-    Benchmark compression for a specific level.
+    Benchmark memcpy (baseline - no compression).
+
+    Returns:
+        (avg_time, compression_ratio, size)
+    """
+    times = []
+
+    for _ in range(iterations):
+        start = time.perf_counter()
+        # Force a copy using bytearray conversion (actual memory copy)
+        copied_data = bytearray(data)
+        end = time.perf_counter()
+        times.append(end - start)
+
+    avg_time = sum(times) / len(times) * 1000  # Convert to milliseconds
+    return avg_time, 0.0, len(data)
+
+
+def benchmark_gzip(data: bytes, compression_level: int, iterations: int = 10) -> tuple[float, float, int]:
+    """
+    Benchmark gzip compression for a specific level.
 
     Returns:
         (avg_time, compression_ratio, compressed_size)
@@ -107,7 +128,7 @@ def benchmark_compression(data: bytes, compression_level: int, iterations: int =
         end = time.perf_counter()
         times.append(end - start)
 
-    avg_time = np.mean(times) * 1000  # Convert to milliseconds
+    avg_time = sum(times) / len(times) * 1000  # Convert to milliseconds
     original_size = len(data)
     compressed_size = len(compressed_data)
     compression_ratio = (1 - compressed_size / original_size) * 100  # Percentage reduction
@@ -115,173 +136,207 @@ def benchmark_compression(data: bytes, compression_level: int, iterations: int =
     return avg_time, compression_ratio, compressed_size
 
 
-def run_benchmarks():
+def benchmark_zstd(data: bytes, compression_level: int, iterations: int = 10) -> tuple[float, float, int]:
+    """
+    Benchmark zstd compression for a specific level.
+
+    Returns:
+        (avg_time, compression_ratio, compressed_size)
+    """
+    times = []
+    compressed_data = None
+    cctx = zstd.ZstdCompressor(level=compression_level)
+
+    for _ in range(iterations):
+        start = time.perf_counter()
+        compressed_data = cctx.compress(data)
+        end = time.perf_counter()
+        times.append(end - start)
+
+    avg_time = sum(times) / len(times) * 1000  # Convert to milliseconds
+    original_size = len(data)
+    compressed_size = len(compressed_data)
+    compression_ratio = (1 - compressed_size / original_size) * 100  # Percentage reduction
+
+    return avg_time, compression_ratio, compressed_size
+
+
+def run_benchmarks(num_docs: int = 10000, iterations: int = 10, gzip_levels: int = 10, zstd_levels: int = 22):
     """Run compression benchmarks across all compression levels."""
-    print("Generating sample JSON document...")
-    doc = create_json_document()
-    json_str = json.dumps(doc, indent=2)
+    print(f"Generating {num_docs:,} sample JSON documents...")
+
+    # Generate multiple documents and concatenate them
+    docs = []
+    for i in range(num_docs):
+        doc = create_json_document()
+        docs.append(doc)
+
+    # Convert all docs to a single JSON array
+    json_str = json.dumps(docs, separators=(',', ':'))  # Compact format
     json_bytes = json_str.encode('utf-8')
 
     original_size = len(json_bytes)
-    print(f"Original JSON size: {original_size:,} bytes ({original_size/1024:.2f} KB)")
-    print(f"Word count in body: {len(doc['body'].split())}")
-    print("\nRunning benchmarks...")
+    print(f"Total data size: {original_size:,} bytes ({original_size/1024/1024:.2f} MB)")
+    print(f"Average document size: {original_size/num_docs:.0f} bytes")
+    print(f"\nRunning benchmarks ({iterations} iterations each)...")
 
     results = {
-        'levels': [],
-        'times': [],
-        'ratios': [],
-        'sizes': [],
+        'memcpy': {},
+        'gzip': {},
+        'zstd': {},
     }
 
-    for level in range(10):  # Compression levels 0-9
-        print(f"  Testing level {level}...", end=" ")
-        avg_time, ratio, size = benchmark_compression(json_bytes, level)
+    # Benchmark memcpy (baseline)
+    print("\n  Testing memcpy (baseline)...")
+    avg_time, ratio, size = benchmark_memcpy(json_bytes, iterations=iterations*10)
+    results['memcpy'] = {
+        'time': avg_time,
+        'ratio': ratio,
+        'size': size,
+        'throughput': (original_size / 1024 / 1024) / (avg_time / 1000)  # MB/s
+    }
+    print(f"    Time: {avg_time:.3f}ms, Throughput: {results['memcpy']['throughput']:.1f} MB/s")
 
-        results['levels'].append(level)
-        results['times'].append(avg_time)
-        results['ratios'].append(ratio)
-        results['sizes'].append(size)
+    # Benchmark gzip
+    print("\n  Testing GZIP compression levels...")
+    for level in range(gzip_levels):  # Compression levels 0-9
+        print(f"    Level {level}...", end=" ", flush=True)
+        avg_time, ratio, size = benchmark_gzip(json_bytes, level, iterations=iterations)
+        results['gzip'][level] = {
+            'time': avg_time,
+            'ratio': ratio,
+            'size': size,
+            'throughput': (original_size / 1024 / 1024) / (avg_time / 1000)  # MB/s
+        }
+        print(f"Time: {avg_time:.2f}ms, Ratio: {ratio:.1f}%, Throughput: {results['gzip'][level]['throughput']:.1f} MB/s")
 
-        print(f"Time: {avg_time:.3f}ms, Reduction: {ratio:.1f}%, Size: {size:,} bytes")
+    # Benchmark zstd
+    print("\n  Testing ZSTD compression levels...")
+    for level in range(1, zstd_levels + 1):  # ZSTD levels 1-22
+        print(f"    Level {level}...", end=" ", flush=True)
+        avg_time, ratio, size = benchmark_zstd(json_bytes, level, iterations=iterations)
+        results['zstd'][level] = {
+            'time': avg_time,
+            'ratio': ratio,
+            'size': size,
+            'throughput': (original_size / 1024 / 1024) / (avg_time / 1000)  # MB/s
+        }
+        print(f"Time: {avg_time:.2f}ms, Ratio: {ratio:.1f}%, Throughput: {results['zstd'][level]['throughput']:.1f} MB/s")
 
     return results, original_size
 
 
-def create_visualization(results: dict, original_size: int):
-    """Create comprehensive visualization of benchmark results."""
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle('GZIP Compression Analysis on JSON Documents\n(1000 word body + metadata)',
-                 fontsize=14, fontweight='bold')
+def print_results(results: dict, original_size: int):
+    """Print comprehensive benchmark results."""
+    print("\n" + "="*100)
+    print("COMPRESSION BENCHMARK RESULTS")
+    print("="*100)
 
-    levels = results['levels']
-    times = results['times']
-    ratios = results['ratios']
-    sizes = results['sizes']
+    print(f"\nOriginal size: {original_size:,} bytes ({original_size/1024/1024:.2f} MB)")
 
-    # Plot 1: Compression Time vs Level
-    ax1 = axes[0, 0]
-    ax1.plot(levels, times, 'o-', linewidth=2, markersize=8, color='#2563eb')
-    ax1.set_xlabel('Compression Level', fontsize=11, fontweight='bold')
-    ax1.set_ylabel('Compression Time (ms)', fontsize=11, fontweight='bold')
-    ax1.set_title('Execution Time vs Compression Level', fontsize=12, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    ax1.set_xticks(levels)
+    # Print memcpy baseline
+    print("\n" + "-"*100)
+    print("MEMCPY BASELINE (no compression)")
+    print("-"*100)
+    memcpy = results['memcpy']
+    print(f"Time: {memcpy['time']:.3f}ms | Throughput: {memcpy['throughput']:.1f} MB/s")
 
-    # Add min/max annotations
-    min_idx = np.argmin(times)
-    max_idx = np.argmax(times)
-    ax1.annotate(f'Fastest\n{times[min_idx]:.3f}ms',
-                xy=(levels[min_idx], times[min_idx]),
-                xytext=(10, 10), textcoords='offset points',
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgreen', alpha=0.7),
-                arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+    # Print GZIP results
+    print("\n" + "-"*100)
+    print("GZIP COMPRESSION")
+    print("-"*100)
+    print(f"{'Level':<8} {'Time (ms)':<12} {'Ratio (%)':<12} {'Size (MB)':<12} {'Throughput':<15} {'vs memcpy':<15}")
+    print("-"*100)
 
-    # Plot 2: Compression Ratio vs Level
-    ax2 = axes[0, 1]
-    ax2.plot(levels, ratios, 's-', linewidth=2, markersize=8, color='#16a34a')
-    ax2.set_xlabel('Compression Level', fontsize=11, fontweight='bold')
-    ax2.set_ylabel('Size Reduction (%)', fontsize=11, fontweight='bold')
-    ax2.set_title('Compression Effectiveness vs Level', fontsize=12, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xticks(levels)
+    for level in sorted(results['gzip'].keys()):
+        data = results['gzip'][level]
+        vs_memcpy = f"{data['time'] / memcpy['time']:.2f}x slower"
+        size_mb = data['size'] / 1024 / 1024
+        print(f"{level:<8} {data['time']:<12.2f} {data['ratio']:<12.1f} {size_mb:<12.2f} {data['throughput']:<15.1f} {vs_memcpy:<15}")
 
-    # Add max compression annotation
-    best_idx = np.argmax(ratios)
-    ax2.annotate(f'Best\n{ratios[best_idx]:.1f}%',
-                xy=(levels[best_idx], ratios[best_idx]),
-                xytext=(10, -20), textcoords='offset points',
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgreen', alpha=0.7),
-                arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+    # Find best GZIP levels
+    best_gzip_ratio = max(results['gzip'].items(), key=lambda x: x[1]['ratio'])
+    fastest_gzip = min(results['gzip'].items(), key=lambda x: x[1]['time'])
+    print(f"\nBest compression: Level {best_gzip_ratio[0]} ({best_gzip_ratio[1]['ratio']:.1f}% reduction)")
+    print(f"Fastest: Level {fastest_gzip[0]} ({fastest_gzip[1]['time']:.2f}ms)")
 
-    # Plot 3: Compressed Size vs Level
-    ax3 = axes[1, 0]
-    bars = ax3.bar(levels, [s/1024 for s in sizes], color='#dc2626', alpha=0.7, edgecolor='black')
-    ax3.axhline(y=original_size/1024, color='gray', linestyle='--', linewidth=2, label=f'Original: {original_size/1024:.1f} KB')
-    ax3.set_xlabel('Compression Level', fontsize=11, fontweight='bold')
-    ax3.set_ylabel('Compressed Size (KB)', fontsize=11, fontweight='bold')
-    ax3.set_title('Compressed Size vs Level', fontsize=12, fontweight='bold')
-    ax3.grid(True, alpha=0.3, axis='y')
-    ax3.set_xticks(levels)
-    ax3.legend()
+    # Print ZSTD results
+    print("\n" + "-"*100)
+    print("ZSTD COMPRESSION")
+    print("-"*100)
+    print(f"{'Level':<8} {'Time (ms)':<12} {'Ratio (%)':<12} {'Size (MB)':<12} {'Throughput':<15} {'vs memcpy':<15}")
+    print("-"*100)
 
-    # Plot 4: Time vs Compression Ratio (scatter with level labels)
-    ax4 = axes[1, 1]
-    scatter = ax4.scatter(times, ratios, s=200, c=levels, cmap='viridis',
-                         edgecolors='black', linewidth=1.5, alpha=0.8)
+    for level in sorted(results['zstd'].keys()):
+        data = results['zstd'][level]
+        vs_memcpy = f"{data['time'] / memcpy['time']:.2f}x slower"
+        size_mb = data['size'] / 1024 / 1024
+        print(f"{level:<8} {data['time']:<12.2f} {data['ratio']:<12.1f} {size_mb:<12.2f} {data['throughput']:<15.1f} {vs_memcpy:<15}")
 
-    # Add level labels to points
-    for i, level in enumerate(levels):
-        ax4.annotate(f'{level}', (times[i], ratios[i]),
-                    ha='center', va='center', fontweight='bold', fontsize=9)
+    # Find best ZSTD levels
+    best_zstd_ratio = max(results['zstd'].items(), key=lambda x: x[1]['ratio'])
+    fastest_zstd = min(results['zstd'].items(), key=lambda x: x[1]['time'])
+    print(f"\nBest compression: Level {best_zstd_ratio[0]} ({best_zstd_ratio[1]['ratio']:.1f}% reduction)")
+    print(f"Fastest: Level {fastest_zstd[0]} ({fastest_zstd[1]['time']:.2f}ms)")
 
-    ax4.set_xlabel('Compression Time (ms)', fontsize=11, fontweight='bold')
-    ax4.set_ylabel('Size Reduction (%)', fontsize=11, fontweight='bold')
-    ax4.set_title('Time vs Effectiveness Trade-off', fontsize=12, fontweight='bold')
-    ax4.grid(True, alpha=0.3)
+    # Comparison summary
+    print("\n" + "="*100)
+    print("SUMMARY: GZIP vs ZSTD vs MEMCPY")
+    print("="*100)
 
-    # Add colorbar
-    cbar = plt.colorbar(scatter, ax=ax4)
-    cbar.set_label('Compression Level', fontsize=10, fontweight='bold')
+    # Get default levels if they exist, otherwise use best
+    gzip_default_level = 6 if 6 in results['gzip'] else best_gzip_ratio[0]
+    zstd_default_level = 3 if 3 in results['zstd'] else best_zstd_ratio[0]
+    gzip_default = results['gzip'][gzip_default_level]
+    zstd_default = results['zstd'][zstd_default_level]
 
-    plt.tight_layout()
+    print(f"\n{'Method':<15} {'Level':<8} {'Time (ms)':<12} {'Ratio (%)':<12} {'Throughput':<15} {'vs memcpy':<15}")
+    print("-"*100)
+    memcpy_vs = "1.00x"
+    gzip_def_vs = f"{gzip_default['time']/memcpy['time']:.2f}x"
+    zstd_def_vs = f"{zstd_default['time']/memcpy['time']:.2f}x"
+    gzip_best_vs = f"{best_gzip_ratio[1]['time']/memcpy['time']:.2f}x"
+    zstd_best_vs = f"{best_zstd_ratio[1]['time']/memcpy['time']:.2f}x"
+    gzip_fast_vs = f"{fastest_gzip[1]['time']/memcpy['time']:.2f}x"
+    zstd_fast_vs = f"{fastest_zstd[1]['time']/memcpy['time']:.2f}x"
 
-    # Save the figure
-    output_path = Path(__file__).parent / 'gzip_compression_analysis.png'
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"\nGraph saved to: {output_path}")
+    print(f"{'memcpy':<15} {'-':<8} {memcpy['time']:<12.3f} {memcpy['ratio']:<12.1f} {memcpy['throughput']:<15.1f} {memcpy_vs:<15}")
+    print(f"{'GZIP (default)':<15} {gzip_default_level:<8} {gzip_default['time']:<12.2f} {gzip_default['ratio']:<12.1f} {gzip_default['throughput']:<15.1f} {gzip_def_vs:<15}")
+    print(f"{'ZSTD (default)':<15} {zstd_default_level:<8} {zstd_default['time']:<12.2f} {zstd_default['ratio']:<12.1f} {zstd_default['throughput']:<15.1f} {zstd_def_vs:<15}")
+    print(f"{'GZIP (best)':<15} {best_gzip_ratio[0]:<8} {best_gzip_ratio[1]['time']:<12.2f} {best_gzip_ratio[1]['ratio']:<12.1f} {best_gzip_ratio[1]['throughput']:<15.1f} {gzip_best_vs:<15}")
+    print(f"{'ZSTD (best)':<15} {best_zstd_ratio[0]:<8} {best_zstd_ratio[1]['time']:<12.2f} {best_zstd_ratio[1]['ratio']:<12.1f} {best_zstd_ratio[1]['throughput']:<15.1f} {zstd_best_vs:<15}")
+    print(f"{'GZIP (fastest)':<15} {fastest_gzip[0]:<8} {fastest_gzip[1]['time']:<12.2f} {fastest_gzip[1]['ratio']:<12.1f} {fastest_gzip[1]['throughput']:<15.1f} {gzip_fast_vs:<15}")
+    print(f"{'ZSTD (fastest)':<15} {fastest_zstd[0]:<8} {fastest_zstd[1]['time']:<12.2f} {fastest_zstd[1]['ratio']:<12.1f} {fastest_zstd[1]['throughput']:<15.1f} {zstd_fast_vs:<15}")
 
-    # Also show it
-    plt.show()
-
-
-def print_summary(results: dict, original_size: int):
-    """Print a summary of the benchmark results."""
-    print("\n" + "="*70)
-    print("BENCHMARK SUMMARY")
-    print("="*70)
-
-    times = results['times']
-    ratios = results['ratios']
-    sizes = results['sizes']
-
-    fastest_idx = np.argmin(times)
-    slowest_idx = np.argmax(times)
-    best_compression_idx = np.argmax(ratios)
-    worst_compression_idx = np.argmin(ratios)
-
-    print(f"\nOriginal size: {original_size:,} bytes ({original_size/1024:.2f} KB)")
-    print(f"\nFastest compression:")
-    print(f"  Level {fastest_idx}: {times[fastest_idx]:.3f}ms ({ratios[fastest_idx]:.1f}% reduction)")
-
-    print(f"\nBest compression:")
-    print(f"  Level {best_compression_idx}: {ratios[best_compression_idx]:.1f}% reduction ({times[best_compression_idx]:.3f}ms)")
-    print(f"  Compressed size: {sizes[best_compression_idx]:,} bytes ({sizes[best_compression_idx]/1024:.2f} KB)")
-
-    print(f"\nRecommended (Level 6 - default balance):")
-    print(f"  Time: {times[6]:.3f}ms")
-    print(f"  Reduction: {ratios[6]:.1f}%")
-    print(f"  Size: {sizes[6]:,} bytes ({sizes[6]/1024:.2f} KB)")
-
-    # Calculate diminishing returns
-    print(f"\nDiminishing returns analysis:")
-    for i in range(1, 10):
-        time_increase = ((times[i] - times[i-1]) / times[i-1]) * 100
-        ratio_increase = ratios[i] - ratios[i-1]
-        print(f"  {i-1} -> {i}: +{time_increase:+6.1f}% time, {ratio_increase:+.2f}% better compression")
-
-    print("="*70)
+    print("\n" + "="*100)
+    print("KEY FINDINGS:")
+    print("="*100)
+    if gzip_default['ratio'] > 0:
+        print(f"- ZSTD is {zstd_default['ratio']/gzip_default['ratio']:.2f}x better compression ratio than GZIP at default levels")
+    print(f"- ZSTD is {gzip_default['time']/zstd_default['time']:.2f}x faster than GZIP at default levels")
+    print(f"- Best ZSTD compression ({best_zstd_ratio[1]['ratio']:.1f}%) vs Best GZIP ({best_gzip_ratio[1]['ratio']:.1f}%)")
+    print(f"- All compression methods are slower than memcpy baseline, as expected")
+    print("="*100)
 
 
-def main():
-    """Main entry point."""
-    print("="*70)
-    print("GZIP Compression Benchmark")
-    print("="*70)
+@click.command()
+@click.option('--docs', '-d', default=10000, help='Number of JSON documents to generate', show_default=True)
+@click.option('--iterations', '-i', default=10, help='Number of iterations per compression level', show_default=True)
+@click.option('--gzip-levels', '-g', default=10, help='Number of GZIP compression levels to test (0-9)', show_default=True)
+@click.option('--zstd-levels', '-z', default=22, help='Number of ZSTD compression levels to test (1-22)', show_default=True)
+def main(docs, iterations, gzip_levels, zstd_levels):
+    """Benchmark GZIP and ZSTD compression on JSON documents."""
+    print("="*100)
+    print(f"GZIP vs ZSTD Compression Benchmark ({docs:,} documents, {iterations} iterations)")
+    print("="*100)
 
-    results, original_size = run_benchmarks()
-    print_summary(results, original_size)
-    create_visualization(results, original_size)
+    results, original_size = run_benchmarks(
+        num_docs=docs,
+        iterations=iterations,
+        gzip_levels=gzip_levels,
+        zstd_levels=zstd_levels
+    )
+    print_results(results, original_size)
 
 
 if __name__ == "__main__":
