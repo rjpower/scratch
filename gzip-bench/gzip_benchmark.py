@@ -25,7 +25,7 @@ import zstandard as zstd
 import click
 
 
-def generate_sample_text(word_count: int = 1000, doc_id: int = 0) -> str:
+def generate_sample_text(word_count: int, doc_id: int) -> str:
     """Generate sample text with realistic word patterns and randomization."""
     # Use a mix of common words to simulate realistic JSON data
     common_words = [
@@ -61,7 +61,7 @@ def generate_sample_text(word_count: int = 1000, doc_id: int = 0) -> str:
     return " ".join(words)
 
 
-def create_json_document(doc_id: int = 0) -> dict:
+def create_json_document(doc_id: int) -> dict:
     """Create a JSON document with 1000 word body and unique metadata per document."""
     # Randomize document attributes to make each document unique
     authors = ["John Doe", "Jane Smith", "Bob Johnson", "Alice Williams", "Charlie Brown",
@@ -112,7 +112,7 @@ def create_json_document(doc_id: int = 0) -> dict:
     }
 
 
-def benchmark_memcpy(data: bytes, iterations: int = 100) -> tuple[float, float, int]:
+def benchmark_memcpy(data: bytes, iterations: int) -> tuple[float, float, int]:
     """
     Benchmark memcpy (baseline - no compression).
 
@@ -132,7 +132,7 @@ def benchmark_memcpy(data: bytes, iterations: int = 100) -> tuple[float, float, 
     return avg_time, 0.0, len(data)
 
 
-def benchmark_gzip(data: bytes, compression_level: int, iterations: int = 10) -> tuple[float, float, int]:
+def benchmark_gzip(data: bytes, compression_level: int, iterations: int) -> tuple[float, float, int]:
     """
     Benchmark gzip compression for a specific level.
 
@@ -161,7 +161,7 @@ def benchmark_gzip(data: bytes, compression_level: int, iterations: int = 10) ->
     return avg_time, compression_ratio, compressed_size
 
 
-def benchmark_zstd(data: bytes, compression_level: int, iterations: int = 10) -> tuple[float, float, int]:
+def benchmark_zstd(data: bytes, compression_level: int, iterations: int) -> tuple[float, float, int]:
     """
     Benchmark zstd compression for a specific level.
 
@@ -186,7 +186,7 @@ def benchmark_zstd(data: bytes, compression_level: int, iterations: int = 10) ->
     return avg_time, compression_ratio, compressed_size
 
 
-def run_benchmarks(num_docs: int = 10000, iterations: int = 10, gzip_levels: int = 10, zstd_levels: int = 22):
+def run_benchmarks(num_docs: int, iterations: int, gzip_levels: range, zstd_levels: range):
     """Run compression benchmarks across all compression levels."""
     print(f"Generating {num_docs:,} unique sample JSON documents...")
 
@@ -213,7 +213,7 @@ def run_benchmarks(num_docs: int = 10000, iterations: int = 10, gzip_levels: int
 
     # Benchmark memcpy (baseline)
     print("\n  Testing memcpy (baseline)...")
-    avg_time, ratio, size = benchmark_memcpy(json_bytes, iterations=iterations*10)
+    avg_time, ratio, size = benchmark_memcpy(json_bytes, iterations * 10)
     results['memcpy'] = {
         'time': avg_time,
         'ratio': ratio,
@@ -223,10 +223,10 @@ def run_benchmarks(num_docs: int = 10000, iterations: int = 10, gzip_levels: int
     print(f"    Time: {avg_time:.3f}ms, Throughput: {results['memcpy']['throughput']:.1f} MB/s")
 
     # Benchmark gzip
-    print("\n  Testing GZIP compression levels...")
-    for level in range(gzip_levels):  # Compression levels 0-9
+    print(f"\n  Testing GZIP compression levels {gzip_levels.start} to {gzip_levels.stop - 1}...")
+    for level in gzip_levels:
         print(f"    Level {level}...", end=" ", flush=True)
-        avg_time, ratio, size = benchmark_gzip(json_bytes, level, iterations=iterations)
+        avg_time, ratio, size = benchmark_gzip(json_bytes, level, iterations)
         results['gzip'][level] = {
             'time': avg_time,
             'ratio': ratio,
@@ -236,10 +236,10 @@ def run_benchmarks(num_docs: int = 10000, iterations: int = 10, gzip_levels: int
         print(f"Time: {avg_time:.2f}ms, Ratio: {ratio:.1f}%, Throughput: {results['gzip'][level]['throughput']:.1f} MB/s")
 
     # Benchmark zstd
-    print("\n  Testing ZSTD compression levels...")
-    for level in range(1, zstd_levels + 1):  # ZSTD levels 1-22
+    print(f"\n  Testing ZSTD compression levels {zstd_levels.start} to {zstd_levels.stop - 1}...")
+    for level in zstd_levels:
         print(f"    Level {level}...", end=" ", flush=True)
-        avg_time, ratio, size = benchmark_zstd(json_bytes, level, iterations=iterations)
+        avg_time, ratio, size = benchmark_zstd(json_bytes, level, iterations)
         results['zstd'][level] = {
             'time': avg_time,
             'ratio': ratio,
@@ -346,10 +346,12 @@ def print_results(results: dict, original_size: int):
 
 @click.command()
 @click.option('--docs', '-d', default=10000, help='Number of JSON documents to generate', show_default=True)
-@click.option('--iterations', '-i', default=10, help='Number of iterations per compression level', show_default=True)
-@click.option('--gzip-levels', '-g', default=10, help='Number of GZIP compression levels to test (0-9)', show_default=True)
-@click.option('--zstd-levels', '-z', default=22, help='Number of ZSTD compression levels to test (1-22)', show_default=True)
-def main(docs, iterations, gzip_levels, zstd_levels):
+@click.option('--iterations', '-i', default=1, help='Number of iterations per compression level', show_default=True)
+@click.option('--gzip-min', default=0, help='Minimum GZIP compression level (0 to 9)', show_default=True)
+@click.option('--gzip-max', default=9, help='Maximum GZIP compression level (0 to 9)', show_default=True)
+@click.option('--zstd-min', default=-10, help='Minimum ZSTD compression level (-100 to 22)', show_default=True)
+@click.option('--zstd-max', default=10, help='Maximum ZSTD compression level (-100 to 22)', show_default=True)
+def main(docs, iterations, gzip_min, gzip_max, zstd_min, zstd_max):
     """Benchmark GZIP and ZSTD compression on JSON documents."""
     print("="*100)
     print(f"GZIP vs ZSTD Compression Benchmark ({docs:,} documents, {iterations} iterations)")
@@ -358,8 +360,8 @@ def main(docs, iterations, gzip_levels, zstd_levels):
     results, original_size = run_benchmarks(
         num_docs=docs,
         iterations=iterations,
-        gzip_levels=gzip_levels,
-        zstd_levels=zstd_levels
+        gzip_levels=range(gzip_min, gzip_max + 1),
+        zstd_levels=range(zstd_min, zstd_max + 1)
     )
     print_results(results, original_size)
 
