@@ -213,21 +213,22 @@ def print_results(benchmark_data: dict):
     print(f"Best docs/sec throughput: Batch size {highest_docs_throughput['batch_size']} ({highest_docs_throughput['docs_per_sec']:.1f} docs/sec)")
     print(f"Best tokens/sec throughput: Batch size {highest_tokens_throughput['batch_size']} ({highest_tokens_throughput['tokens_per_sec']:.0f} tokens/sec)")
 
-    # Calculate speedup from smallest to largest batch
+    # Calculate speedup from smallest to largest batch (based on tokens/sec)
     baseline = results[0]
-    fastest_speedup = baseline['avg_time'] / fastest['avg_time']
-    print(f"\nSpeedup from batch size 1 to {fastest['batch_size']}: {fastest_speedup:.2f}x faster")
+    max_batch = results[-1]
+    throughput_speedup = highest_tokens_throughput['tokens_per_sec'] / baseline['tokens_per_sec']
+    print(f"\nSpeedup from batch size {baseline['batch_size']} to {max_batch['batch_size']}: {throughput_speedup:.2f}x faster (tokens/sec)")
 
     # Show scaling efficiency
     print("\n" + "-"*120)
-    print("BATCH SIZE SCALING")
+    print("BATCH SIZE SCALING (based on tokens/sec throughput)")
     print("-"*120)
     print(f"{'Batch':<8} {'Speedup':<12} {'Efficiency':<12} {'vs Batch 1':<15}")
     print("-"*120)
 
-    baseline_time = results[0]['avg_time']
+    baseline_tokens_per_sec = results[0]['tokens_per_sec']
     for result in results:
-        speedup = baseline_time / result['avg_time']
+        speedup = result['tokens_per_sec'] / baseline_tokens_per_sec
         # Ideal speedup would be linear with batch size
         ideal_speedup = result['batch_size'] / results[0]['batch_size']
         efficiency = speedup / ideal_speedup * 100 if ideal_speedup > 0 else 0
@@ -238,12 +239,12 @@ def print_results(benchmark_data: dict):
     print("OBSERVATIONS")
     print("="*120)
 
-    # Calculate where diminishing returns start
+    # Calculate where diminishing returns start (based on tokens/sec improvement)
     improvements = []
     for i in range(1, len(results)):
-        prev_time = results[i-1]['avg_time']
-        curr_time = results[i]['avg_time']
-        improvement = (prev_time - curr_time) / prev_time * 100
+        prev_tokens_per_sec = results[i-1]['tokens_per_sec']
+        curr_tokens_per_sec = results[i]['tokens_per_sec']
+        improvement = (curr_tokens_per_sec - prev_tokens_per_sec) / prev_tokens_per_sec * 100
         improvements.append((results[i]['batch_size'], improvement))
 
     # Find where improvement drops below 5%
@@ -255,8 +256,8 @@ def print_results(benchmark_data: dict):
 
     if diminishing_point:
         print(f"- Diminishing returns begin around batch size {diminishing_point}")
-    print(f"- Batch processing provides up to {fastest_speedup:.2f}x speedup over single-document processing")
-    print(f"- Optimal batch size for this workload appears to be: {fastest['batch_size']}")
+    print(f"- Batch processing provides up to {throughput_speedup:.2f}x speedup in tokens/sec throughput")
+    print(f"- Optimal batch size for tokens/sec throughput: {highest_tokens_throughput['batch_size']}")
 
     # Memory consideration note
     print(f"- Larger batch sizes trade memory usage for throughput")
