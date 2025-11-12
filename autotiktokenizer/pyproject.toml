@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autotiktokenizer"
+version = "0.1.0"
+description = "A bridge between TikToken and HuggingFace tokenizers"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "AutoTikTokenizer Contributors"}
+]
+keywords = ["tokenizer", "tiktoken", "huggingface", "nlp", "transformers"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "tiktoken>=0.5.0",
+    "transformers>=4.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/openai/tiktoken/issues/358"
+Repository = "https://github.com/openai/tiktoken/issues/358"
+Issues = "https://github.com/openai/tiktoken/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autotiktokenizer*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
