@@ -31,39 +31,95 @@ def bytes_to_unicode():
     return dict(zip(bs, cs))
 
 
-def build_mergeable_ranks(vocab: Dict[str, int], merges: Optional[str] = None) -> Dict[bytes, int]:
+def build_mergeable_ranks(vocab: Dict[str, int], merges_str: Optional[str] = None) -> Dict[bytes, int]:
     """
     Build mergeable_ranks dictionary from HuggingFace vocabulary and merges.
 
+    The key insight: merges.txt contains BPE merge operations in order.
+    Each line is a merge like "h e" meaning "merge 'h' + 'e' -> 'he'".
+    The LINE NUMBER (rank) determines merge priority in BPE.
+
     Args:
         vocab: Dictionary mapping token strings to token IDs
-        merges: Optional string containing merge operations (from merges.txt)
+        merges_str: String containing merge operations (from merges.txt)
 
     Returns:
-        Dictionary mapping token bytes to ranks for tiktoken
+        Dictionary mapping token bytes to merge ranks for tiktoken
     """
     # Create reverse byte encoder (from GPT-2 encoding to actual bytes)
     byte_encoder = bytes_to_unicode()
     byte_decoder = {v: k for k, v in byte_encoder.items()}
 
+    def token_str_to_bytes(token_str: str) -> bytes:
+        """Convert token string to bytes using GPT-2 byte decoder."""
+        try:
+            return bytes([byte_decoder[c] for c in token_str])
+        except KeyError:
+            # Fall back to UTF-8 for special tokens
+            return token_str.encode('utf-8', errors='ignore')
+
     mergeable_ranks = {}
 
-    # First, add all single-byte tokens and base tokens from vocab
-    for token_str, token_id in vocab.items():
-        # Try to decode the token from GPT-2 encoding to bytes
-        try:
-            # Convert token string to bytes using the GPT-2 byte decoder
-            token_bytes = bytes([byte_decoder[c] for c in token_str])
-            mergeable_ranks[token_bytes] = token_id
-        except (KeyError, ValueError):
-            # If decoding fails, encode as UTF-8 bytes directly
-            # This handles special tokens and tokens not in the byte decoder
-            try:
-                token_bytes = token_str.encode('utf-8')
-                mergeable_ranks[token_bytes] = token_id
-            except:
-                # Skip tokens that can't be encoded
-                pass
+    # Parse merges.txt to understand merge operations
+    merge_operations = []
+    if merges_str:
+        for line in merges_str.strip().split('\n'):
+            line = line.strip()
+            # Skip empty lines and header comments
+            if line and not line.startswith('#'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    # Each line is like "h e" meaning merge h+e -> he
+                    merge_operations.append((parts[0], parts[1]))
+
+    # Build set of tokens created by merges
+    merged_token_strs = set()
+    for part1, part2 in merge_operations:
+        merged = part1 + part2
+        merged_token_strs.add(merged)
+
+    # Step 1: Add base tokens (those not created by merges)
+    # These get low ranks (high priority)
+    base_rank = 0
+    base_tokens = []
+
+    for token_str in vocab.keys():
+        # Base tokens are either:
+        # 1. Single character tokens
+        # 2. Tokens not created by any merge operation
+        if token_str not in merged_token_strs:
+            base_tokens.append(token_str)
+
+    # Sort base tokens by their token ID for deterministic ordering
+    base_tokens.sort(key=lambda t: vocab[t])
+
+    for token_str in base_tokens:
+        token_bytes = token_str_to_bytes(token_str)
+        if token_bytes:
+            mergeable_ranks[token_bytes] = base_rank
+            base_rank += 1
+
+    # Step 2: Add merged tokens with ranks based on merge order
+    # Each merge operation gets a rank = base_rank + line_number
+    for merge_idx, (part1, part2) in enumerate(merge_operations):
+        merged_str = part1 + part2
+
+        # Only add if this token exists in the vocabulary
+        if merged_str in vocab:
+            token_bytes = token_str_to_bytes(merged_str)
+            if token_bytes and token_bytes not in mergeable_ranks:
+                # Rank = base_rank + merge index
+                # This ensures merges happen in the order specified in merges.txt
+                mergeable_ranks[token_bytes] = base_rank + merge_idx
+
+    # Step 3: Add any remaining tokens from vocab that we haven't seen
+    # (edge case handling)
+    max_rank = max(mergeable_ranks.values()) if mergeable_ranks else 0
+    for token_str in vocab.keys():
+        token_bytes = token_str_to_bytes(token_str)
+        if token_bytes and token_bytes not in mergeable_ranks:
+            max_rank += 1
+            mergeable_ranks[token_bytes] = max_rank
 
     return mergeable_ranks
 
@@ -193,9 +249,67 @@ def convert_hf_to_tiktoken(
         )
 
 
+def verify_conversion(
+    hf_tokenizer,
+    tiktoken_encoder: tiktoken.Encoding,
+    test_texts: Optional[list] = None
+) -> bool:
+    """
+    Verify that tiktoken conversion produces same tokens as HuggingFace.
+
+    Args:
+        hf_tokenizer: Original HuggingFace tokenizer
+        tiktoken_encoder: Converted tiktoken Encoding
+        test_texts: Optional list of test strings
+
+    Returns:
+        True if conversion is verified correct
+    """
+    if test_texts is None:
+        test_texts = [
+            "Hello world!",
+            "This is a test.",
+            "The quick brown fox jumps over the lazy dog.",
+            "Testing tokenization with numbers: 123 456 789.",
+        ]
+
+    all_match = True
+    mismatches = []
+
+    for text in test_texts:
+        # Encode with HuggingFace
+        hf_tokens = hf_tokenizer.encode(text, add_special_tokens=False)
+
+        # Encode with tiktoken
+        try:
+            tiktoken_tokens = tiktoken_encoder.encode_ordinary(text)
+        except:
+            tiktoken_tokens = tiktoken_encoder.encode(text)
+
+        # Compare
+        if hf_tokens != tiktoken_tokens:
+            all_match = False
+            mismatches.append({
+                'text': text,
+                'hf_tokens': hf_tokens,
+                'tiktoken_tokens': tiktoken_tokens,
+                'hf_count': len(hf_tokens),
+                'tiktoken_count': len(tiktoken_tokens)
+            })
+
+    if not all_match:
+        print(f"Warning: Token mismatch detected in {len(mismatches)}/{len(test_texts)} test cases")
+        for i, mismatch in enumerate(mismatches[:3], 1):  # Show first 3 mismatches
+            print(f"\n  Mismatch {i}: '{mismatch['text'][:50]}...'")
+            print(f"    HF:      {mismatch['hf_tokens'][:10]}... ({mismatch['hf_count']} tokens)")
+            print(f"    TikToken: {mismatch['tiktoken_tokens'][:10]}... ({mismatch['tiktoken_count']} tokens)")
+
+    return all_match
+
+
 class HFTikTokenizer:
     """
-    Helper class that combines convert_hf_to_tiktoken with caching.
+    Helper class that combines convert_hf_to_tiktoken with caching and validation.
 
     This class caches the converted tiktoken Encoding for repeated use.
     """
@@ -208,6 +322,7 @@ class HFTikTokenizer:
         model_name: str,
         *,
         force_reload: bool = False,
+        verify: bool = False,
         **kwargs
     ) -> tiktoken.Encoding:
         """
@@ -216,13 +331,30 @@ class HFTikTokenizer:
         Args:
             model_name: HuggingFace model name
             force_reload: Force reload even if cached
+            verify: Verify conversion correctness (slower, for testing)
             **kwargs: Additional arguments for tokenizer loading
 
         Returns:
             tiktoken.Encoding instance
         """
         if model_name not in cls._cache or force_reload:
-            cls._cache[model_name] = convert_hf_to_tiktoken(model_name, **kwargs)
+            # Convert tokenizer
+            if verify:
+                # Load HF tokenizer for verification
+                hf_tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
+                encoder = convert_hf_to_tiktoken(hf_tokenizer, **kwargs)
+
+                # Verify conversion
+                print(f"Verifying conversion for {model_name}...")
+                is_correct = verify_conversion(hf_tokenizer, encoder)
+                if is_correct:
+                    print(f"✓ Conversion verified correct!")
+                else:
+                    print(f"⚠ Conversion may have issues - tokens don't match exactly")
+            else:
+                encoder = convert_hf_to_tiktoken(model_name, **kwargs)
+
+            cls._cache[model_name] = encoder
         return cls._cache[model_name]
 
     @classmethod
