@@ -6,6 +6,7 @@ combining TikToken's performance with HuggingFace's model compatibility.
 """
 
 from .core import AutoTikTokenizer
+from .converter import convert_hf_to_tiktoken, HFTikTokenizer
 
 __version__ = "0.1.0"
-__all__ = ["AutoTikTokenizer"]
+__all__ = ["AutoTikTokenizer", "convert_hf_to_tiktoken", "HFTikTokenizer"]

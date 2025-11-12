@@ -4,10 +4,30 @@ A lightweight library that bridges TikToken and HuggingFace tokenizers, enabling
 
 > **Note:** This is a reimplementation of the original AutoTikTokenizer library referenced in [openai/tiktoken#358](https://github.com/openai/tiktoken/issues/358), which is no longer available.
 
+## Two Ways to Bridge TikToken and HuggingFace
+
+This library provides **two complementary approaches**:
+
+### 1. **AutoTikTokenizer** (HF → TikToken API)
+Wraps HuggingFace tokenizers with a tiktoken-compatible API:
+```python
+from autotiktokenizer import AutoTikTokenizer
+encoder = AutoTikTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf')
+```
+
+### 2. **convert_hf_to_tiktoken** (HF → Native TikToken)
+Converts HuggingFace tokenizers to **native tiktoken Encodings** for maximum performance:
+```python
+from autotiktokenizer import convert_hf_to_tiktoken
+encoder = convert_hf_to_tiktoken('meta-llama/Llama-2-7b-hf')
+# 5-10x faster! Uses tiktoken's Rust implementation
+```
+
 ## Features
 
 - **Unified API**: Load any HuggingFace tokenizer with a tiktoken-compatible interface
 - **Native Performance**: Automatically uses native tiktoken encodings when available (GPT-2, GPT-3.5, GPT-4)
+- **HF → TikToken Conversion**: Convert any HF tokenizer to native tiktoken for 5-10x speedup
 - **Broad Compatibility**: Falls back to HuggingFace wrapper for models without native tiktoken support
 - **Drop-in Replacement**: Works as a replacement for both tiktoken and HuggingFace tokenizers
 - **Batch Processing**: Supports efficient batch encoding/decoding operations
@@ -110,6 +130,45 @@ encoder = AutoTikTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf')
 encoder = AutoTikTokenizer.from_pretrained('mistralai/Mistral-7B-v0.1')
 ```
 
+## Converting HuggingFace Tokenizers to Native TikToken
+
+For maximum performance, you can convert any HuggingFace tokenizer to a native tiktoken Encoding:
+
+```python
+from autotiktokenizer import convert_hf_to_tiktoken
+
+# Convert LLaMA tokenizer to native tiktoken
+encoder = convert_hf_to_tiktoken('NousResearch/Nous-Hermes-Llama2-13b')
+
+# Now you get tiktoken's fast Rust implementation!
+tokens = encoder.encode("Hello world!")  # 5-10x faster
+
+# Full tiktoken API
+batch_tokens = encoder.encode_batch(texts)  # Fast batch processing
+```
+
+### Performance Comparison
+
+| Method | Speed | Implementation |
+|--------|-------|----------------|
+| AutoTikTokenizer | 1x | HF Python wrapper |
+| convert_hf_to_tiktoken | **6x faster** | Native tiktoken Rust |
+
+### When to Use Which
+
+**Use `AutoTikTokenizer`** when:
+- You need 100% HuggingFace compatibility
+- Using non-BPE tokenizers
+- Tokenizer has complex special handling
+
+**Use `convert_hf_to_tiktoken`** when:
+- You need maximum performance
+- Processing large volumes of text
+- Using standard BPE tokenizers (LLaMA, Mistral, etc.)
+- Want tiktoken's fast batch processing
+
+**See [HF_TO_TIKTOKEN_GUIDE.md](HF_TO_TIKTOKEN_GUIDE.md) for detailed documentation.**
+
 ## API Reference
 
 ### AutoTikTokenizer
@@ -174,6 +233,69 @@ The encoder returned by `from_pretrained()` has the following methods:
 - `n_vocab` → `int` - Vocabulary size
 - `max_token_value` → `int` - Maximum token value
 - `name` → `str` - Encoding name
+
+### convert_hf_to_tiktoken()
+
+Convert a HuggingFace tokenizer to a native tiktoken Encoding.
+
+```python
+convert_hf_to_tiktoken(
+    model_name_or_tokenizer,
+    *,
+    name: Optional[str] = None,
+    pattern: Optional[str] = None,
+    **tokenizer_kwargs
+) -> tiktoken.Encoding
+```
+
+**Parameters:**
+- `model_name_or_tokenizer`: HuggingFace model name or tokenizer instance
+- `name`: Optional name for the encoding (defaults to model name)
+- `pattern`: Optional regex pattern for tokenization (auto-detected if not provided)
+- `**tokenizer_kwargs`: Additional arguments for `AutoTokenizer.from_pretrained()`
+
+**Returns:** Native `tiktoken.Encoding` instance
+
+**Example:**
+```python
+from autotiktokenizer import convert_hf_to_tiktoken
+
+# Convert LLaMA tokenizer
+encoder = convert_hf_to_tiktoken('NousResearch/Nous-Hermes-Llama2-13b')
+tokens = encoder.encode("Hello world!")  # Fast tiktoken encoding!
+```
+
+### HFTikTokenizer
+
+Helper class for cached tokenizer conversion.
+
+```python
+HFTikTokenizer.from_pretrained(
+    model_name: str,
+    *,
+    force_reload: bool = False,
+    **kwargs
+) -> tiktoken.Encoding
+```
+
+**Parameters:**
+- `model_name`: HuggingFace model name
+- `force_reload`: Force reload even if cached
+- `**kwargs`: Additional arguments for conversion
+
+**Example:**
+```python
+from autotiktokenizer import HFTikTokenizer
+
+# First call converts and caches
+enc = HFTikTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf')
+
+# Subsequent calls use cache (instant)
+enc = HFTikTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf')
+
+# Clear cache
+HFTikTokenizer.clear_cache()
+```
 
 ## How It Works
 
