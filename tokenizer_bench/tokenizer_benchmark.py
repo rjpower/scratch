@@ -4,18 +4,20 @@
 # dependencies = [
 #     "transformers>=4.35.0",
 #     "torch>=2.0.0",
+#     "tiktoken>=0.5.0",
 #     "click>=8.1.0",
 #     "numpy>=1.24.0",
 # ]
 # ///
 """
-Benchmark HuggingFace AutoTokenizer with different batch sizes.
+Benchmark HuggingFace AutoTokenizer and tiktoken with different batch sizes.
 
 This script analyzes:
 - Tokenization time vs batch size
 - Throughput (tokens/sec and docs/sec) vs batch size
 - Performance scaling with batch size
 - Memory efficiency characteristics
+- Comparison between HuggingFace and tiktoken tokenizers
 """
 
 import time
@@ -23,6 +25,7 @@ import random
 import click
 import numpy as np
 from transformers import AutoTokenizer
+import tiktoken
 
 
 def generate_sample_text(word_count: int, doc_id: int) -> str:
@@ -129,8 +132,61 @@ def benchmark_tokenization(tokenizer, documents: list[str], batch_size: int, ite
     }
 
 
+def benchmark_tiktoken_tokenization(tokenizer, documents: list[str], batch_size: int, iterations: int = 3) -> dict:
+    """
+    Benchmark tiktoken tokenization for a specific batch size.
+
+    Returns:
+        dict with timing and throughput metrics
+    """
+    num_docs = len(documents)
+    times = []
+    total_tokens = 0
+
+    # Split documents into equal batches using numpy
+    num_batches = num_docs // batch_size
+    batches = np.array_split(documents, num_batches)
+
+    for iteration in range(iterations):
+        iteration_tokens = 0
+        start = time.perf_counter()
+
+        # Process each batch
+        for batch in batches:
+            # Tokenize each document in the batch
+            # tiktoken doesn't have built-in batch processing, so we process individually
+            for doc in batch:
+                tokens = tokenizer.encode(doc)
+                iteration_tokens += len(tokens)
+
+        end = time.perf_counter()
+        times.append(end - start)
+        total_tokens = iteration_tokens
+
+    avg_time = sum(times) / len(times)
+    min_time = min(times)
+    max_time = max(times)
+
+    # Calculate metrics
+    docs_per_sec = num_docs / avg_time
+    tokens_per_sec = total_tokens / avg_time
+    avg_tokens_per_doc = total_tokens / num_docs
+
+    return {
+        'batch_size': batch_size,
+        'avg_time': avg_time,
+        'min_time': min_time,
+        'max_time': max_time,
+        'docs_per_sec': docs_per_sec,
+        'tokens_per_sec': tokens_per_sec,
+        'total_tokens': total_tokens,
+        'avg_tokens_per_doc': avg_tokens_per_doc,
+        'num_batches': num_batches
+    }
+
+
 def run_benchmarks(tokenizer_name: str, num_docs: int, words_per_doc: int,
-                   batch_sizes: list[int], iterations: int) -> dict:
+                   batch_sizes: list[int], iterations: int, documents: list[str] = None) -> dict:
     """Run tokenization benchmarks across all batch sizes."""
     print("="*100)
     print(f"HuggingFace AutoTokenizer Benchmark")
@@ -148,9 +204,10 @@ def run_benchmarks(tokenizer_name: str, num_docs: int, words_per_doc: int,
     print(f"Tokenizer loaded: vocab size = {tokenizer.vocab_size:,}")
     print()
 
-    # Generate documents
-    documents = generate_documents(num_docs, words_per_doc)
-    print()
+    # Generate or use existing documents
+    if documents is None:
+        documents = generate_documents(num_docs, words_per_doc)
+        print()
 
     # Run benchmarks for each batch size
     print(f"Running benchmarks for batch sizes: {batch_sizes[0]} to {batch_sizes[-1]}...")
@@ -165,6 +222,47 @@ def run_benchmarks(tokenizer_name: str, num_docs: int, words_per_doc: int,
 
     return {
         'tokenizer_name': tokenizer_name,
+        'num_docs': num_docs,
+        'words_per_doc': words_per_doc,
+        'results': results
+    }
+
+
+def run_tiktoken_benchmarks(encoding_name: str, num_docs: int, words_per_doc: int,
+                            batch_sizes: list[int], iterations: int, documents: list[str] = None) -> dict:
+    """Run tiktoken tokenization benchmarks across all batch sizes."""
+    print("="*100)
+    print(f"tiktoken Tokenizer Benchmark")
+    print(f"Encoding: {encoding_name}")
+    print(f"Documents: {num_docs:,} x {words_per_doc:,} words")
+    print(f"Iterations per batch size: {iterations}")
+    print("="*100)
+    print()
+
+    # Load tokenizer
+    print(f"Loading tiktoken encoding: {encoding_name}...")
+    tokenizer = tiktoken.get_encoding(encoding_name)
+    print(f"Tokenizer loaded")
+    print()
+
+    # Generate or use existing documents
+    if documents is None:
+        documents = generate_documents(num_docs, words_per_doc)
+        print()
+
+    # Run benchmarks for each batch size
+    print(f"Running benchmarks for batch sizes: {batch_sizes[0]} to {batch_sizes[-1]}...")
+    print()
+
+    results = []
+    for batch_size in batch_sizes:
+        print(f"  Batch size {batch_size:3d}...", end=" ", flush=True)
+        result = benchmark_tiktoken_tokenization(tokenizer, documents, batch_size, iterations)
+        results.append(result)
+        print(f"Time: {result['avg_time']:.3f}s, Throughput: {result['docs_per_sec']:.1f} docs/s, {result['tokens_per_sec']:.0f} tokens/s")
+
+    return {
+        'tokenizer_name': f"tiktoken/{encoding_name}",
         'num_docs': num_docs,
         'words_per_doc': words_per_doc,
         'results': results
@@ -264,15 +362,78 @@ def print_results(benchmark_data: dict):
     print("="*120)
 
 
+def print_comparison(hf_data: dict, tiktoken_data: dict):
+    """Print comparison between HuggingFace and tiktoken tokenizers."""
+    hf_results = hf_data['results']
+    tiktoken_results = tiktoken_data['results']
+
+    print("\n" + "="*120)
+    print("TOKENIZER COMPARISON: HuggingFace vs tiktoken")
+    print("="*120)
+    print(f"HuggingFace Model: {hf_data['tokenizer_name']}")
+    print(f"tiktoken Encoding: {tiktoken_data['tokenizer_name']}")
+    print(f"Dataset: {hf_data['num_docs']:,} documents x {hf_data['words_per_doc']:,} words")
+    print()
+
+    print("-"*120)
+    print(f"{'Batch':<8} {'HF Time (s)':<14} {'tiktoken Time (s)':<18} {'Speedup':<12} {'HF Tokens/s':<15} {'tiktoken Tokens/s':<20}")
+    print("-"*120)
+
+    for hf_result, tiktoken_result in zip(hf_results, tiktoken_results):
+        speedup = hf_result['avg_time'] / tiktoken_result['avg_time']
+        speedup_indicator = "tiktoken" if speedup > 1 else "HF"
+        print(f"{hf_result['batch_size']:<8} "
+              f"{hf_result['avg_time']:<14.4f} "
+              f"{tiktoken_result['avg_time']:<18.4f} "
+              f"{speedup:<12.2f}x {speedup_indicator:<8} "
+              f"{hf_result['tokens_per_sec']:<15.0f} "
+              f"{tiktoken_result['tokens_per_sec']:<20.0f}")
+
+    print("\n" + "="*120)
+    print("OVERALL COMPARISON")
+    print("="*120)
+
+    # Find best performers for each tokenizer
+    hf_best = min(hf_results, key=lambda x: x['avg_time'])
+    tiktoken_best = min(tiktoken_results, key=lambda x: x['avg_time'])
+    hf_best_throughput = max(hf_results, key=lambda x: x['tokens_per_sec'])
+    tiktoken_best_throughput = max(tiktoken_results, key=lambda x: x['tokens_per_sec'])
+
+    print(f"\nFastest overall time:")
+    print(f"  HuggingFace: Batch size {hf_best['batch_size']} ({hf_best['avg_time']:.3f}s)")
+    print(f"  tiktoken: Batch size {tiktoken_best['batch_size']} ({tiktoken_best['avg_time']:.3f}s)")
+    overall_speedup = hf_best['avg_time'] / tiktoken_best['avg_time']
+    winner = "tiktoken" if overall_speedup > 1 else "HuggingFace"
+    print(f"  Winner: {winner} ({abs(overall_speedup):.2f}x faster)")
+
+    print(f"\nBest tokens/sec throughput:")
+    print(f"  HuggingFace: Batch size {hf_best_throughput['batch_size']} ({hf_best_throughput['tokens_per_sec']:.0f} tokens/sec)")
+    print(f"  tiktoken: Batch size {tiktoken_best_throughput['batch_size']} ({tiktoken_best_throughput['tokens_per_sec']:.0f} tokens/sec)")
+    throughput_speedup = tiktoken_best_throughput['tokens_per_sec'] / hf_best_throughput['tokens_per_sec']
+    winner_throughput = "tiktoken" if throughput_speedup > 1 else "HuggingFace"
+    print(f"  Winner: {winner_throughput} ({abs(throughput_speedup):.2f}x higher throughput)")
+
+    # Average tokens per document comparison
+    hf_avg_tokens = hf_results[0]['avg_tokens_per_doc']
+    tiktoken_avg_tokens = tiktoken_results[0]['avg_tokens_per_doc']
+    print(f"\nAverage tokens per document:")
+    print(f"  HuggingFace: {hf_avg_tokens:.1f} tokens/doc")
+    print(f"  tiktoken: {tiktoken_avg_tokens:.1f} tokens/doc")
+    print(f"  Difference: {abs(hf_avg_tokens - tiktoken_avg_tokens):.1f} tokens/doc ({abs(hf_avg_tokens - tiktoken_avg_tokens) / max(hf_avg_tokens, tiktoken_avg_tokens) * 100:.1f}%)")
+
+    print("="*120)
+
+
 @click.command()
 @click.option('--model', '-m', default='gpt2', help='HuggingFace model name', show_default=True)
+@click.option('--tiktoken-encoding', '-t', default='cl100k_base', help='tiktoken encoding name (cl100k_base for GPT-3.5/4, p50k_base for GPT-3)', show_default=True)
 @click.option('--docs', '-d', default=512, help='Number of documents to generate (default 64*8=512 for even division)', show_default=True)
 @click.option('--words', '-w', default=1000, help='Words per document', show_default=True)
 @click.option('--batch-min', default=1, help='Minimum batch size', show_default=True)
 @click.option('--batch-max', default=64, help='Maximum batch size', show_default=True)
 @click.option('--iterations', '-i', default=3, help='Number of iterations per batch size', show_default=True)
-def main(model, docs, words, batch_min, batch_max, iterations):
-    """Benchmark HuggingFace AutoTokenizer with different batch sizes."""
+def main(model, tiktoken_encoding, docs, words, batch_min, batch_max, iterations):
+    """Benchmark HuggingFace AutoTokenizer and tiktoken with different batch sizes."""
     # Generate batch sizes: 1, 2, 4, 8, 16, 32, 64
     batch_sizes = []
     size = batch_min
@@ -293,15 +454,39 @@ def main(model, docs, words, batch_min, batch_max, iterations):
             print(f"Recommended: Use a number of docs that's a multiple of {batch_max} (e.g., {batch_max * 8})")
             break
 
-    benchmark_data = run_benchmarks(
+    # Generate documents once to ensure fair comparison
+    print("="*100)
+    print("Generating documents for benchmarks...")
+    print("="*100)
+    documents = generate_documents(docs, words)
+    print()
+
+    # Run HuggingFace benchmark
+    hf_benchmark_data = run_benchmarks(
         tokenizer_name=model,
         num_docs=docs,
         words_per_doc=words,
         batch_sizes=batch_sizes,
-        iterations=iterations
+        iterations=iterations,
+        documents=documents
     )
 
-    print_results(benchmark_data)
+    print_results(hf_benchmark_data)
+
+    # Run tiktoken benchmark
+    tiktoken_benchmark_data = run_tiktoken_benchmarks(
+        encoding_name=tiktoken_encoding,
+        num_docs=docs,
+        words_per_doc=words,
+        batch_sizes=batch_sizes,
+        iterations=iterations,
+        documents=documents
+    )
+
+    print_results(tiktoken_benchmark_data)
+
+    # Print comparison
+    print_comparison(hf_benchmark_data, tiktoken_benchmark_data)
 
 
 if __name__ == "__main__":
