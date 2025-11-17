@@ -1,0 +1,10 @@
+[project]
+name = "jax-bare"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "jax[cpu]>=0.8.0",
+    "numpy>=2.3.5",
+    "pytest>=9.0.1",
+]
