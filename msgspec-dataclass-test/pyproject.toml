@@ -1,0 +1,12 @@
+[project]
+name = "msgspec-dataclass-test"
+version = "0.1.0"
+description = "Test msgspec dataclass serialization"
+requires-python = ">=3.9"
+dependencies = [
+    "msgspec>=0.18.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
