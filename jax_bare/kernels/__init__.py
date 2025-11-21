@@ -10,6 +10,11 @@ Available kernels:
 - reshape: Tensor reshape operations
 - transpose: Tensor transpose operations
 - broadcast: Broadcasting operations
+- where: Conditional selection
+- softmax: Softmax activation
+- gelu: GELU activation function
+- mean: Mean reduction
+- var: Variance reduction
 """
 
 # Import all kernel functions
@@ -19,6 +24,11 @@ from . import reduce
 from . import reshape
 from . import transpose
 from . import broadcast
+from . import where
+from . import softmax
+from . import gelu
+from . import mean
+from . import var
 
 __all__ = [
     'elementwise',
@@ -27,4 +37,9 @@ __all__ = [
     'reshape',
     'transpose',
     'broadcast',
+    'where',
+    'softmax',
+    'gelu',
+    'mean',
+    'var',
 ]

@@ -14,21 +14,40 @@ from jax.experimental import pallas as pl
 from typing import Tuple, Optional
 import functools
 
+# Store references to original JAX operations to avoid recursion
+_jax_matmul = jnp.matmul
+_jax_dot_general = jax.lax.dot_general
+
 
 def _matmul_kernel(x_ref, y_ref, out_ref):
-    """Basic matrix multiplication kernel.
+    """Basic matrix multiplication kernel with explicit loops.
+
+    Implements: C[i,j] = sum_k(A[i,k] * B[k,j])
 
     Args:
-        x_ref: Left input reference
-        y_ref: Right input reference
-        out_ref: Output reference
+        x_ref: Left input reference [M, K]
+        y_ref: Right input reference [K, N]
+        out_ref: Output reference [M, N]
     """
     # Load inputs
     x = x_ref[...]
     y = y_ref[...]
 
-    # Perform matmul and store result
-    out_ref[...] = jnp.matmul(x, y)
+    m, k = x.shape
+    k2, n = y.shape
+
+    # Initialize output to zeros
+    result = jnp.zeros((m, n), dtype=x.dtype)
+
+    # Triple nested loop: C[i,j] = sum_k(A[i,k] * B[k,j])
+    for i in range(m):
+        for j in range(n):
+            acc = 0.0
+            for k_idx in range(k):
+                acc += x[i, k_idx] * y[k_idx, j]
+            result = result.at[i, j].set(acc)
+
+    out_ref[...] = result
 
 
 def matmul_simple(x: jax.Array, y: jax.Array) -> jax.Array:
@@ -69,9 +88,10 @@ def matmul_simple(x: jax.Array, y: jax.Array) -> jax.Array:
 
 
 def _batch_matmul_kernel(x_ref, y_ref, out_ref):
-    """Batched matrix multiplication kernel.
+    """Batched matrix multiplication kernel with explicit loops.
 
     Handles batched matmul where the batch dimensions are already aligned.
+    Implements: C[..., i, j] = sum_k(A[..., i, k] * B[..., k, j])
 
     Args:
         x_ref: Left input reference [..., M, K]
@@ -81,8 +101,41 @@ def _batch_matmul_kernel(x_ref, y_ref, out_ref):
     x = x_ref[...]
     y = y_ref[...]
 
-    # JAX matmul handles batched dimensions automatically
-    out_ref[...] = jnp.matmul(x, y)
+    # Get shapes
+    *batch_dims, m, k = x.shape
+    *_, k2, n = y.shape
+
+    # Initialize output
+    result = jnp.zeros(tuple(batch_dims) + (m, n), dtype=x.dtype)
+
+    # Helper function to get batch indices as a flat iteration
+    def get_batch_indices(batch_shape):
+        """Generate all batch indices for given batch shape."""
+        if not batch_shape:
+            return [()]
+        indices = []
+        import itertools
+        for idx in itertools.product(*[range(d) for d in batch_shape]):
+            indices.append(idx)
+        return indices
+
+    # Iterate over batch dimensions
+    batch_indices = get_batch_indices(tuple(batch_dims))
+
+    for batch_idx in batch_indices:
+        # Extract matrices for this batch
+        x_batch = x[batch_idx]
+        y_batch = y[batch_idx]
+
+        # Perform matmul for this batch with explicit loops
+        for i in range(m):
+            for j in range(n):
+                acc = 0.0
+                for k_idx in range(k):
+                    acc += x_batch[i, k_idx] * y_batch[k_idx, j]
+                result = result.at[batch_idx + (i, j)].set(acc)
+
+    out_ref[...] = result
 
 
 def batch_matmul(x: jax.Array, y: jax.Array) -> jax.Array:
@@ -208,24 +261,92 @@ def dot_general_pallas(
     (lhs_contract, rhs_contract), (lhs_batch, rhs_batch) = dimension_numbers
 
     def _dot_general_kernel(lhs_ref, rhs_ref, out_ref):
-        """Kernel for dot_general operation."""
+        """Kernel for dot_general operation with explicit loops.
+
+        Implements the contraction logic based on dimension_numbers:
+        - Batch dimensions are preserved
+        - Contracted dimensions are summed over
+        - Free dimensions become output dimensions
+        """
         lhs_val = lhs_ref[...]
         rhs_val = rhs_ref[...]
 
-        # Perform dot_general
-        result = jax.lax.dot_general(
-            lhs_val,
-            rhs_val,
-            dimension_numbers=dimension_numbers,
-            preferred_element_type=preferred_element_type,
-        )
+        # Parse dimension numbers
+        (lhs_contract_dims, rhs_contract_dims), (lhs_batch_dims, rhs_batch_dims) = dimension_numbers
+
+        # Get all dimension indices
+        lhs_ndim = lhs_val.ndim
+        rhs_ndim = rhs_val.ndim
+
+        # Identify free dimensions (non-batch, non-contract)
+        lhs_free_dims = [i for i in range(lhs_ndim)
+                         if i not in lhs_contract_dims and i not in lhs_batch_dims]
+        rhs_free_dims = [i for i in range(rhs_ndim)
+                         if i not in rhs_contract_dims and i not in rhs_batch_dims]
+
+        # Build output shape: batch_dims + lhs_free_dims + rhs_free_dims
+        batch_shape = tuple(lhs_val.shape[i] for i in lhs_batch_dims)
+        lhs_free_shape = tuple(lhs_val.shape[i] for i in lhs_free_dims)
+        rhs_free_shape = tuple(rhs_val.shape[i] for i in rhs_free_dims)
+
+        out_dtype = preferred_element_type if preferred_element_type is not None else lhs_val.dtype
+        result = jnp.zeros(batch_shape + lhs_free_shape + rhs_free_shape, dtype=out_dtype)
+
+        # Get contract dimension sizes
+        contract_shape = tuple(lhs_val.shape[i] for i in lhs_contract_dims)
+
+        # Helper to generate all index combinations
+        def get_indices(shape):
+            if not shape:
+                return [()]
+            import itertools
+            return list(itertools.product(*[range(d) for d in shape]))
+
+        # Generate all possible indices
+        batch_indices = get_indices(batch_shape)
+        lhs_free_indices = get_indices(lhs_free_shape)
+        rhs_free_indices = get_indices(rhs_free_shape)
+        contract_indices = get_indices(contract_shape)
+
+        # Perform the contraction with explicit loops
+        for batch_idx in batch_indices:
+            for lhs_free_idx in lhs_free_indices:
+                for rhs_free_idx in rhs_free_indices:
+                    acc = 0.0
+
+                    # Sum over contracted dimensions
+                    for contract_idx in contract_indices:
+                        # Build lhs index: batch + free + contract (in original order)
+                        lhs_index = [0] * lhs_ndim
+                        for i, dim in enumerate(lhs_batch_dims):
+                            lhs_index[dim] = batch_idx[i]
+                        for i, dim in enumerate(lhs_free_dims):
+                            lhs_index[dim] = lhs_free_idx[i]
+                        for i, dim in enumerate(lhs_contract_dims):
+                            lhs_index[dim] = contract_idx[i]
+
+                        # Build rhs index: batch + free + contract (in original order)
+                        rhs_index = [0] * rhs_ndim
+                        for i, dim in enumerate(rhs_batch_dims):
+                            rhs_index[dim] = batch_idx[i]
+                        for i, dim in enumerate(rhs_free_dims):
+                            rhs_index[dim] = rhs_free_idx[i]
+                        for i, dim in enumerate(rhs_contract_dims):
+                            rhs_index[dim] = contract_idx[i]
+
+                        # Accumulate product
+                        acc += lhs_val[tuple(lhs_index)] * rhs_val[tuple(rhs_index)]
+
+                    # Store result
+                    out_index = batch_idx + lhs_free_idx + rhs_free_idx
+                    result = result.at[out_index].set(acc)
 
         out_ref[...] = result
 
     # Compute output shape
     # This is complex in the general case, so we use jax's shape inference
     dummy_result = jax.eval_shape(
-        lambda: jax.lax.dot_general(
+        lambda: _jax_dot_general(
             lhs, rhs,
             dimension_numbers=dimension_numbers,
             preferred_element_type=preferred_element_type,
