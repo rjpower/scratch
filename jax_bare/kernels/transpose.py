@@ -14,6 +14,9 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from typing import Sequence, Tuple
 
+# Store reference to original JAX transpose to avoid recursion
+_jax_transpose = jnp.transpose
+
 
 def _compute_inverse_permutation(perm: Sequence[int]) -> Tuple[int, ...]:
     """Compute the inverse of a permutation.
@@ -51,7 +54,7 @@ def _transpose_kernel(x_ref, o_ref, *, perm: Tuple[int, ...]):
     x = x_ref[...]
 
     # Transpose and store to output
-    o_ref[...] = jnp.transpose(x, perm)
+    o_ref[...] = _jax_transpose(x, perm)
 
 
 def transpose_pallas(x: jax.Array, perm: Sequence[int]) -> jax.Array:

@@ -14,6 +14,10 @@ from jax.experimental import pallas as pl
 from typing import Tuple, Optional
 import functools
 
+# Store references to original JAX operations to avoid recursion
+_jax_matmul = jnp.matmul
+_jax_dot_general = jax.lax.dot_general
+
 
 def _matmul_kernel(x_ref, y_ref, out_ref):
     """Basic matrix multiplication kernel.
@@ -28,7 +32,7 @@ def _matmul_kernel(x_ref, y_ref, out_ref):
     y = y_ref[...]
 
     # Perform matmul and store result
-    out_ref[...] = jnp.matmul(x, y)
+    out_ref[...] = _jax_matmul(x, y)
 
 
 def matmul_simple(x: jax.Array, y: jax.Array) -> jax.Array:
@@ -82,7 +86,7 @@ def _batch_matmul_kernel(x_ref, y_ref, out_ref):
     y = y_ref[...]
 
     # JAX matmul handles batched dimensions automatically
-    out_ref[...] = jnp.matmul(x, y)
+    out_ref[...] = _jax_matmul(x, y)
 
 
 def batch_matmul(x: jax.Array, y: jax.Array) -> jax.Array:
@@ -213,7 +217,7 @@ def dot_general_pallas(
         rhs_val = rhs_ref[...]
 
         # Perform dot_general
-        result = jax.lax.dot_general(
+        result = _jax_dot_general(
             lhs_val,
             rhs_val,
             dimension_numbers=dimension_numbers,
@@ -225,7 +229,7 @@ def dot_general_pallas(
     # Compute output shape
     # This is complex in the general case, so we use jax's shape inference
     dummy_result = jax.eval_shape(
-        lambda: jax.lax.dot_general(
+        lambda: _jax_dot_general(
             lhs, rhs,
             dimension_numbers=dimension_numbers,
             preferred_element_type=preferred_element_type,
