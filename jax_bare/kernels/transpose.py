@@ -14,9 +14,6 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from typing import Sequence, Tuple
 
-# Store reference to original JAX transpose to avoid recursion
-_jax_transpose = jnp.transpose
-
 
 def _compute_inverse_permutation(perm: Sequence[int]) -> Tuple[int, ...]:
     """Compute the inverse of a permutation.
@@ -50,11 +47,32 @@ def _transpose_kernel(x_ref, o_ref, *, perm: Tuple[int, ...]):
         o_ref: Output tensor reference (Ref)
         perm: Permutation of axes for transpose
     """
+    # Compute inverse permutation to map output indices to input indices
+    inv_perm = _compute_inverse_permutation(perm)
+
     # Load the entire input block
     x = x_ref[...]
 
-    # Transpose and store to output
-    o_ref[...] = _jax_transpose(x, perm)
+    # Get output shape and number of dimensions
+    out_shape = o_ref.shape
+    ndim = len(perm)
+
+    # Create meshgrid of output indices
+    # For each dimension, create an array of indices ranging from 0 to shape[dim]-1
+    # meshgrid produces ndim arrays, each with shape = out_shape
+    # indices[i][j0, j1, j2, ...] = ji (the value of the i-th index at that position)
+    indices = jnp.meshgrid(*[jnp.arange(s) for s in out_shape], indexing='ij')
+
+    # Remap indices according to inverse permutation
+    # For output position [i, j, k, l] with inv_perm=(0, 2, 1, 3),
+    # we read from input position [i, k, j, l]
+    # in_indices[0] = indices[inv_perm[0]] gives us the remapped 0th input dimension
+    # in_indices[1] = indices[inv_perm[1]] gives us the remapped 1st input dimension, etc.
+    in_indices = tuple(indices[inv_perm[i]] for i in range(ndim))
+
+    # Use advanced indexing to perform the transpose
+    # This reads from x at the remapped input positions and writes to output
+    o_ref[...] = x[in_indices]
 
 
 def transpose_pallas(x: jax.Array, perm: Sequence[int]) -> jax.Array:

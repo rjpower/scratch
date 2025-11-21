@@ -5,6 +5,12 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from functools import partial
 
+# Store references to original JAX primitive operations to avoid recursion
+_jax_exp = jnp.exp
+_jax_tanh = jnp.tanh
+_jax_sqrt = jnp.sqrt
+_jax_power = jnp.power
+
 
 def elementwise_binary_kernel(x_ref, y_ref, out_ref, *, op):
     """Generic binary elementwise kernel.
@@ -41,11 +47,11 @@ def elementwise_unary_kernel(x_ref, out_ref, *, op):
     x = x_ref[...]
 
     if op == 'exp':
-        out_ref[...] = jnp.exp(x)
+        out_ref[...] = _jax_exp(x)
     elif op == 'tanh':
-        out_ref[...] = jnp.tanh(x)
+        out_ref[...] = _jax_tanh(x)
     elif op == 'sqrt':
-        out_ref[...] = jnp.sqrt(x)
+        out_ref[...] = _jax_sqrt(x)
 
 
 def integer_pow_kernel(x_ref, out_ref, *, y):
@@ -57,7 +63,7 @@ def integer_pow_kernel(x_ref, out_ref, *, y):
         y: Integer exponent
     """
     x = x_ref[...]
-    out_ref[...] = jnp.power(x, y)
+    out_ref[...] = _jax_power(x, y)
 
 
 # Binary operations
@@ -123,7 +129,7 @@ def exp(x: jax.Array) -> jax.Array:
     """Element-wise exponential using Pallas."""
     # Handle scalars by falling back to JAX
     if not hasattr(x, 'shape') or x.ndim == 0:
-        return jnp.exp(x)
+        return _jax_exp(x)
     return pl.pallas_call(
         partial(elementwise_unary_kernel, op='exp'),
         out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
@@ -135,7 +141,7 @@ def tanh(x: jax.Array) -> jax.Array:
     """Element-wise tanh using Pallas."""
     # Handle scalars by falling back to JAX
     if not hasattr(x, 'shape') or x.ndim == 0:
-        return jnp.tanh(x)
+        return _jax_tanh(x)
     return pl.pallas_call(
         partial(elementwise_unary_kernel, op='tanh'),
         out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
@@ -147,7 +153,7 @@ def sqrt(x: jax.Array) -> jax.Array:
     """Element-wise square root using Pallas."""
     # Handle scalars by falling back to JAX
     if not hasattr(x, 'shape') or x.ndim == 0:
-        return jnp.sqrt(x)
+        return _jax_sqrt(x)
     return pl.pallas_call(
         partial(elementwise_unary_kernel, op='sqrt'),
         out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),

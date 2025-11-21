@@ -32,9 +32,6 @@ class OperationRegistry:
             jnp.reshape: pallas_backend.reshape_op,
             jnp.transpose: pallas_backend.transpose_op,
 
-            # Conditional operations
-            jnp.where: pallas_backend.where_op,
-
             # Reduction operations
             jnp.mean: pallas_backend.mean_op,
             jnp.var: pallas_backend.var_op,

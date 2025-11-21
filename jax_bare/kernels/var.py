@@ -15,6 +15,10 @@ def var_kernel(x_ref, out_ref, *, axis: int, size: int):
 
     Var(x) = mean((x - mean(x))^2)
 
+    Uses explicit two-pass algorithm:
+    1. First pass: compute mean by looping and accumulating sum
+    2. Second pass: compute variance by looping and accumulating squared deviations
+
     Args:
         x_ref: Input array
         out_ref: Output array
@@ -23,17 +27,28 @@ def var_kernel(x_ref, out_ref, *, axis: int, size: int):
     """
     x = x_ref[...]
 
-    # Compute mean
-    x_mean = _jax_mean(x, axis=axis, keepdims=True)
+    # Initialize accumulator for mean computation
+    sum_val = jnp.zeros_like(out_ref[...])
 
-    # Center the data
-    x_centered = x - x_mean
+    # First pass: compute mean
+    for i in range(size):
+        # Extract slice at position i along the reduction axis (keepdims=True style)
+        slice_i = jax.lax.slice_in_dim(x, i, i+1, axis=axis)
+        sum_val = sum_val + slice_i
 
-    # Square
-    x_squared = x_centered * x_centered
+    mean_val = sum_val / size
 
-    # Mean of squares
-    out_ref[...] = _jax_mean(x_squared, axis=axis, keepdims=True)
+    # Initialize accumulator for variance computation
+    sum_sq = jnp.zeros_like(out_ref[...])
+
+    # Second pass: compute variance
+    for i in range(size):
+        # Extract slice at position i along the reduction axis
+        slice_i = jax.lax.slice_in_dim(x, i, i+1, axis=axis)
+        diff = slice_i - mean_val
+        sum_sq = sum_sq + diff * diff
+
+    out_ref[...] = sum_sq / size
 
 
 def var(x: jax.Array, axis: int = -1, keepdims: bool = False) -> jax.Array:
